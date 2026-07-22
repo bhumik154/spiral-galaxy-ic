@@ -16,9 +16,11 @@ Setting up a galaxy for an N-body simulation means answering two separate questi
 
 The spiral-arm formula's reference length, and the bar's and disk's vertical scatter, all scale with `r_vir` rather than using a fixed constant, so the same galaxy produces the same shape and thickness regardless of what units the caller happens to be working in (a fixed vertical scatter previously meant the same galaxy described as `r_vir=100` "kpc" versus `r_vir=0.1` "Mpc" went from a thin disk to a vertical pillar).
 
+The disk's radius is drawn by rejection sampling, not by clipping an exponential draw to `[r_bar, r_max]`. Clipping doesn't discard out-of-range draws, it deposits them exactly on the boundary instead, and with this profile's actual parameters that's not a rare correction: about 48.7% of raw draws land below `r_bar` (when barred) and about 3.6% land above `r_max`, both confirmed directly by sampling. That would turn roughly half the disk into an artificial, infinitesimally thin ring rather than a real exponential profile, exactly the kind of localized overdensity that destabilizes an N-body gravity solve in its first few timesteps.
+
 ## Tested against exact output, not just shape
 
-[`tests/test_spiral_galaxy_ic.py`](tests/test_spiral_galaxy_ic.py) has 32 cases. The core one locks in real numbers, not just array shapes:
+[`tests/test_spiral_galaxy_ic.py`](tests/test_spiral_galaxy_ic.py) has 33 cases. The core one locks in real numbers, not just array shapes:
 
 ```python
 def test_exact_output_for_a_fixed_seed():
@@ -26,7 +28,7 @@ def test_exact_output_for_a_fixed_seed():
     disk = build_galaxy_disk(n_stars=3, n_gas=2, r_vir=100.0, pitch_angle_deg=18.0,
                               num_arms=4, is_barred=True, rng=rng)
 
-    np.testing.assert_allclose(disk.radii, [8.0, 12.55873, 8.0, 13.068283, 2.604359], rtol=1e-5)
+    np.testing.assert_allclose(disk.radii, [20.775928, 12.55873, 14.779028, 13.068283, 2.604359], rtol=1e-5)
     np.testing.assert_array_equal(disk.particle_types, [STAR, STAR, STAR, GAS, GAS])
 ```
 
@@ -42,7 +44,7 @@ That's computed directly by running the function once and locking the result in,
 | Type ordering (stars first, then gas) | Matches the documented convention exactly |
 | Velocity direction is always a unit vector, always z=0 | This is a thin-disk kinematic model; that assumption is enforced, not just described |
 | Radii are never negative | Basic physical sanity |
-| Spiral-arm particles stay within [r_bar, r_max] | The one radius bound this function actually guarantees by construction (bulge and bar are unclipped Gaussians, not bounded) |
+| Spiral-arm particles stay within [r_bar, r_max] | The one radius bound this function actually guarantees, via rejection sampling (bulge and bar are unbounded Gaussians, not bounded) |
 | `num_arms=0` doesn't crash | The naive spiral-arm formula divides by `num_arms` and calls `rng.integers(0, num_arms)`, both of which blow up at 0 |
 | `num_arms=0` gives an azimuthally uniform disk | Not just "doesn't crash": confirms it's a real armless disk, not a spiral with the arm count silently forced to 0 |
 | Barred vs. unbarred diverge under the same seed | The bar branch is only reachable when `is_barred=True` |
@@ -62,6 +64,7 @@ That's computed directly by running the function once and locking the result in,
 | A negative radius in `nfw_enclosed_mass` doesn't produce NaN | One bad entry in an array of radii (e.g. plotting a rotation curve) otherwise poisoned the whole result; negative radii are clamped to the r=0 case instead |
 | The same galaxy is scale-invariant across unit systems | Confirmed the previous fixed reference length broke this directly (two theta values differing by more than 14 radians for the same galaxy in different units) before fixing it |
 | Vertical scatter scales with `r_max`, not a fixed length | A tenfold change in `r_vir` must scale the disk's thickness by the same tenfold factor; confirmed a fixed absolute thickness only managed about 6.5x instead of 10x before this fix |
+| Disk radii don't pile up at `r_bar` or `r_max` | Clipping (the previous approach) would put roughly half the disk exactly on one boundary; confirmed directly that it produced tens of thousands of exact hits at large N, versus essentially none with rejection sampling |
 
 ## Usage
 

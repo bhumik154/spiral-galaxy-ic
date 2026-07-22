@@ -156,8 +156,24 @@ def build_galaxy_disk(n_stars, n_gas, r_vir, pitch_angle_deg, num_arms, is_barre
 
     n_disk = int(disk_mask.sum())
     if n_disk > 0:
+        # Rejection sampling, not clipping: clipping an exponential draw to
+        # [r_bar, r_max] doesn't discard the out-of-range particles, it
+        # piles them up exactly on the boundary instead. With this profile's
+        # actual parameters that's not a rare correction: about 48.7% of raw
+        # draws land below r_bar (when barred) and about 3.6% land above
+        # r_max, both confirmed directly by sampling. Clipping would turn
+        # very roughly half the disk into a single infinitesimally thin,
+        # artificially dense ring at r_bar, with a hollow gap between it and
+        # the center - exactly the kind of localized overdensity that would
+        # destabilize an N-body gravity solve in its first few timesteps.
+        # Resampling only the out-of-range entries preserves the actual
+        # exponential profile's shape within [r_bar, r_max] instead.
         r_disk = rng.exponential(r_max * 0.3, size=n_disk)
-        r_disk = np.clip(r_disk, r_bar, r_max)
+        invalid = (r_disk < r_bar) | (r_disk > r_max)
+        while np.any(invalid):
+            n_invalid = int(invalid.sum())
+            r_disk[invalid] = rng.exponential(r_max * 0.3, size=n_invalid)
+            invalid = (r_disk < r_bar) | (r_disk > r_max)
         r[disk_mask] = r_disk
         if num_arms > 0:
             arm_offset = rng.integers(0, num_arms, size=n_disk) * (2 * np.pi / num_arms)

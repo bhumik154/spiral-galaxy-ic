@@ -36,15 +36,15 @@ def test_exact_output_for_a_fixed_seed():
     # changed, whether intentionally or not.
     #
     # These values have changed across several earlier versions of this
-    # test: the switch to vectorized batched draws, replacing (b + 1e-3)
-    # with an exact b==0 check, replacing the fixed (r_bar + 1.0) reference
-    # length with one that scales with r_vir, and now replacing the bar and
-    # disk branches' fixed vertical scatter (0.5 and 1.0) with one scaled by
-    # r_max (a fixed absolute thickness meant a thin disk in kpc-scale units
-    # became a vertical pillar once the same galaxy was described in
-    # Mpc-scale units instead). Same seed still gives identical output
-    # across calls to this version; it does not reproduce the exact output
-    # of any earlier version.
+    # test - vectorized batched draws, the b==0 check, the scale-invariant
+    # reference length, scale-invariant vertical scatter, and now replacing
+    # np.clip with rejection sampling for the disk radius (clipping an
+    # exponential draw to [r_bar, r_max] doesn't discard out-of-range
+    # particles, it piles them up exactly on the boundary: about 48.7% of
+    # draws land below r_bar and about 3.6% above r_max with this profile's
+    # parameters, confirmed directly by sampling). Same seed still gives
+    # identical output across calls to this version; it does not reproduce
+    # the exact output of any earlier version.
     rng = np.random.default_rng(42)
     disk = build_galaxy_disk(n_stars=3, n_gas=2, r_vir=100.0, pitch_angle_deg=18.0, num_arms=4, is_barred=True, rng=rng)
 
@@ -52,10 +52,10 @@ def test_exact_output_for_a_fixed_seed():
         disk.positions,
         np.array(
             [
-                [0.7469255, -7.965055, 1.7569005],
-                [-4.361737, -11.776967, -0.099851824],
-                [-0.5894666, 7.9782534, -0.36972472],
-                [12.654846, -3.2611198, -1.3618591],
+                [-8.0172, -19.166735, -1.3618591],
+                [0.08978706, 12.558409, 2.4450827],
+                [-4.483142, 14.082653, -0.30905896],
+                [-1.2709162, -13.006337, -0.85665566],
                 [0.18213761, -2.5979822, -0.6324852],
             ],
             dtype=np.float32,
@@ -66,10 +66,10 @@ def test_exact_output_for_a_fixed_seed():
         disk.velocity_directions,
         np.array(
             [
-                [0.9956319, 0.093365684, 0.0],
-                [0.9377514, -0.34730718, 0.0],
-                [-0.9972817, -0.07368332, 0.0],
-                [0.24954462, 0.9683633, 0.0],
+                [0.92254525, -0.38588893, 0.0],
+                [-0.9999744, 0.0071493736, 0.0],
+                [-0.95288086, -0.30334485, 0.0],
+                [0.9952598, -0.09725196, 0.0],
                 [0.9975515, 0.06993568, 0.0],
             ],
             dtype=np.float32,
@@ -77,7 +77,7 @@ def test_exact_output_for_a_fixed_seed():
         rtol=1e-5,
     )
     np.testing.assert_allclose(
-        disk.radii, [8.0, 12.55873, 8.0, 13.068283, 2.604359], rtol=1e-5
+        disk.radii, [20.775928, 12.55873, 14.779028, 13.068283, 2.604359], rtol=1e-5
     )
     np.testing.assert_array_equal(disk.particle_types, [STAR, STAR, STAR, GAS, GAS])
 
@@ -112,9 +112,9 @@ def test_radii_are_never_negative():
 
 
 def test_spiral_arm_particles_stay_within_r_bar_and_r_max():
-    # The explicit np.clip in the spiral-disk branch is the one hard radial
-    # bound this function guarantees; the bulge and bar branches are drawn
-    # from unclipped Gaussians and are not bounded by construction.
+    # Rejection sampling in the disk branch is the one hard radial bound
+    # this function guarantees on both sides; the bulge and bar branches
+    # are drawn from unbounded Gaussians and are not bounded by construction.
     r_vir = 150.0
     r_max = r_vir * 0.4
     is_barred = True
@@ -122,6 +122,27 @@ def test_spiral_arm_particles_stay_within_r_bar_and_r_max():
 
     disk = build_galaxy_disk(2000, 500, r_vir, 18.0, 4, is_barred, rng=np.random.default_rng(11))
     assert np.all(disk.radii <= r_max + 1e-4)
+
+
+def test_disk_radii_do_not_pile_up_at_the_boundaries():
+    # Clipping (the previous approach) doesn't discard out-of-range draws,
+    # it deposits them exactly on the boundary instead: confirmed directly
+    # by sampling, about 48.7% of raw exponential draws land below r_bar
+    # and about 3.6% land above r_max with this profile's actual
+    # parameters, turning roughly half the disk into an artificial,
+    # infinitesimally thin ring. Rejection sampling should leave
+    # essentially none exactly at either boundary.
+    r_vir = 150.0
+    r_max = r_vir * 0.4
+    r_bar = r_max * 0.2
+
+    disk = build_galaxy_disk(0, 200_000, r_vir, 18.0, 4, is_barred=True, rng=np.random.default_rng(1))
+    at_r_bar = int(np.sum(disk.radii == np.float32(r_bar)))
+    at_r_max = int(np.sum(disk.radii == np.float32(r_max)))
+    # A tiny handful of exact floating-point coincidences are possible by
+    # chance; nothing close to the tens of thousands clipping would produce.
+    assert at_r_bar < 50
+    assert at_r_max < 50
 
 
 def test_num_arms_zero_does_not_crash():
