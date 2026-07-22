@@ -38,7 +38,12 @@ def nfw_enclosed_mass(r, total_mass, r_vir, concentration):
         raise ValueError(f"total_mass must be positive, got {total_mass!r}")
 
     r_s = r_vir / concentration
-    x = r / r_s
+    # A negative r (e.g. one bad entry in an array of radii for a rotation
+    # curve plot) would otherwise make x <= -1 somewhere, and log(1 + x)
+    # of zero or a negative number is -inf or NaN. Enclosed mass at a
+    # negative radius isn't physically meaningful, so it's clamped to the
+    # r=0 case (zero enclosed mass) instead of corrupting the whole array.
+    x = np.maximum(r / r_s, 0.0)
     f_x = np.log(1.0 + x) - x / (1.0 + x)
     f_c = np.log(1.0 + concentration) - concentration / (1.0 + concentration)
     return total_mass * (f_x / f_c)
@@ -150,12 +155,24 @@ def build_galaxy_disk(n_stars, n_gas, r_vir, pitch_angle_deg, num_arms, is_barre
         r[disk_mask] = r_disk
         if num_arms > 0:
             arm_offset = rng.integers(0, num_arms, size=n_disk) * (2 * np.pi / num_arms)
-            # np.maximum floors r_disk before the log: an exact r_disk=0 (the
+            # r_scale is the log-spiral's reference length: the radius where
+            # theta_spiral crosses 0. It must scale with r_vir like every
+            # other length in this function does, or the spiral's winding
+            # depends on which units the caller happened to use (confirmed
+            # directly: the same galaxy built at r_vir=100 "kpc" vs r_vir=0.1
+            # "Mpc" produced completely different pitch before this fix,
+            # since a fixed r_bar + 1.0 doesn't scale down with r_bar in the
+            # Mpc case). r_bar itself is already a fine reference length when
+            # there's a bar; r_max * 0.05 (the same fraction already used for
+            # the bulge's radial spread) stands in for it when unbarred.
+            r_scale = r_bar if is_barred else r_max * 0.05
+            # np.maximum floors r_disk before the log, scaled with r_max for
+            # the same scale-invariance reason: an exact r_disk=0 (the
             # exponential distribution's domain includes 0, though it's
             # vanishingly rare with a nonzero scale) would otherwise give
             # log(0)=-inf, then 0*cos(-inf)=NaN once converted to cartesian
             # coordinates, silently poisoning that particle's position.
-            theta_spiral = np.log(np.maximum(r_disk, 1e-6) / (r_bar + 1.0)) / b_safe
+            theta_spiral = np.log(np.maximum(r_disk, 1e-8 * r_max) / r_scale) / b_safe
             theta[disk_mask] = theta_spiral + arm_offset + rng.normal(0, 0.2, size=n_disk)
         else:
             theta[disk_mask] = rng.uniform(0, 2 * np.pi, size=n_disk)

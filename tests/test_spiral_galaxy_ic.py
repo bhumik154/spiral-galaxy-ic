@@ -35,16 +35,15 @@ def test_exact_output_for_a_fixed_seed():
     # locked in, not hand-derived. If this changes, the generator's output
     # changed, whether intentionally or not.
     #
-    # These values differ from earlier versions of this test twice over: once
-    # for switching build_galaxy_disk from a per-particle Python loop to
-    # vectorized, batched draws (branch selector, then bulge, then bar, then
-    # disk, each drawn for all of its particles in one call), and again for
-    # replacing the (b + 1e-3) singularity guard with an exact b==0 check
-    # (the old flat offset shifted the singularity to b=-1e-3 instead of
-    # removing it, and skewed every pitch angle's geometry by a tiny margin
-    # in the process). Same seed still gives identical output across calls
-    # to this version; it does not reproduce the exact output of either
-    # earlier version.
+    # These values have changed across several earlier versions of this
+    # test: the switch to vectorized batched draws, replacing (b + 1e-3)
+    # with an exact b==0 check, and now replacing the fixed (r_bar + 1.0)
+    # reference length with one that scales with r_vir (a fixed +1.0 broke
+    # scale invariance: the same galaxy built with r_vir=100 "kpc" vs
+    # r_vir=0.1 "Mpc" produced a completely different spiral pitch, since
+    # r_bar scaled down with the unit change but the fixed 1.0 didn't).
+    # Same seed still gives identical output across calls to this version;
+    # it does not reproduce the exact output of any earlier version.
     rng = np.random.default_rng(42)
     disk = build_galaxy_disk(n_stars=3, n_gas=2, r_vir=100.0, pitch_angle_deg=18.0, num_arms=4, is_barred=True, rng=rng)
 
@@ -52,10 +51,10 @@ def test_exact_output_for_a_fixed_seed():
         disk.positions,
         np.array(
             [
-                [-2.1261175, -7.7123036, 0.8784503],
-                [-8.254536, -9.464901, -0.049925912],
-                [2.278024, 7.6688075, -0.18486236],
-                [10.676022, -7.53675, -0.68092954],
+                [0.7469255, -7.965055, 0.8784503],
+                [-4.361737, -11.776967, -0.049925912],
+                [-0.5894666, 7.9782534, -0.18486236],
+                [12.654846, -3.2611198, -0.68092954],
                 [0.18213761, -2.5979822, -0.6324852],
             ],
             dtype=np.float32,
@@ -66,10 +65,10 @@ def test_exact_output_for_a_fixed_seed():
         disk.velocity_directions,
         np.array(
             [
-                [0.96403795, -0.26576468, 0.0],
-                [0.7536511, -0.6572747, 0.0],
-                [-0.95860094, 0.284753, 0.0],
-                [0.5767207, 0.8169414, 0.0],
+                [0.9956319, 0.093365684, 0.0],
+                [0.9377514, -0.34730718, 0.0],
+                [-0.9972817, -0.07368332, 0.0],
+                [0.24954462, 0.9683633, 0.0],
                 [0.9975515, 0.06993568, 0.0],
             ],
             dtype=np.float32,
@@ -243,15 +242,18 @@ def test_pitch_angle_exactly_zero_does_not_crash():
 class _FixedDiskDraws:
     """Forces every particle into the disk branch at a fixed radius, with no
     arm offset and no angular noise, so the resulting position is exactly
-    r * (cos, sin) of log(r / (r_bar + 1)) / b_safe and nothing else -
+    r * (cos, sin) of log(r / r_scale) / b_safe and nothing else -
     hand-checkable against the formula directly, not just "looks reasonable".
     """
+
+    def __init__(self, r_disk_value=30.0):
+        self._r_disk_value = r_disk_value
 
     def random(self, size=None):
         return np.full(size, 0.99)  # always past the bulge/bar thresholds
 
     def exponential(self, scale, size=None):
-        return np.full(size, 30.0)
+        return np.full(size, self._r_disk_value)
 
     def integers(self, low, high, size=None):
         return np.zeros(size, dtype=np.int64)  # arm_offset = 0
@@ -270,13 +272,17 @@ def test_trailing_arm_pitch_angle_matches_the_direct_formula_not_the_old_shifted
     # position bound check can't catch that, since r*cos(theta) is always
     # bounded by r no matter how garbled theta is; confirmed that
     # separately before writing this test). This checks the actual angle
-    # against the formula directly instead.
+    # against the formula directly instead, using r_scale (r_max * 0.05 for
+    # an unbarred disk) rather than the old fixed (r_bar + 1.0) reference.
+    r_vir = 150.0
+    r_max = r_vir * 0.4
+    r_scale = r_max * 0.05
     r_disk_value = 30.0
     pitch_angle_deg = -0.0572957795
     b = np.tan(np.radians(pitch_angle_deg))
-    expected_theta = np.log(r_disk_value / 1.0) / b
+    expected_theta = np.log(r_disk_value / r_scale) / b
 
-    disk = build_galaxy_disk(0, 1, 150.0, pitch_angle_deg, num_arms=1, is_barred=False, rng=_FixedDiskDraws())
+    disk = build_galaxy_disk(0, 1, r_vir, pitch_angle_deg, num_arms=1, is_barred=False, rng=_FixedDiskDraws())
 
     np.testing.assert_allclose(disk.positions[0, 0], r_disk_value * np.cos(expected_theta), rtol=1e-4)
     np.testing.assert_allclose(disk.positions[0, 1], r_disk_value * np.sin(expected_theta), rtol=1e-4)
@@ -315,3 +321,37 @@ def test_nfw_enclosed_mass_rejects_non_positive_total_mass():
     # a zero or negative halo mass isn't a meaningful input to model.
     with pytest.raises(ValueError):
         nfw_enclosed_mass(r=50.0, total_mass=0.0, r_vir=200.0, concentration=5.0)
+
+
+def test_nfw_enclosed_mass_does_not_produce_nan_from_a_negative_radius():
+    # x <= -1 makes log(1 + x) either log(0) or log(a negative number),
+    # -inf or NaN respectively - confirmed directly before this guard, one
+    # bad entry in an array of radii (e.g. plotting a rotation curve)
+    # poisoned the whole result. Negative radii are clamped to r=0 (zero
+    # enclosed mass) instead.
+    result = nfw_enclosed_mass(r=np.array([-50.0, 10.0, 100.0]), total_mass=1e12, r_vir=200.0, concentration=5.0)
+    assert not np.any(np.isnan(result))
+    assert result[0] == 0.0
+
+
+def test_build_galaxy_disk_is_scale_invariant():
+    # The same galaxy described in different units (e.g. r_vir=100 "kpc"
+    # vs r_vir=0.1 "Mpc", with every length scaled by the same factor)
+    # must produce the same angular structure. A fixed reference length in
+    # the spiral-arm formula's denominator breaks this: it dominates at
+    # small unit scales and vanishes at large ones, so the same physical
+    # galaxy would wind differently depending on which units were used to
+    # describe it. Confirmed this broke under the previous (r_bar + 1.0)
+    # denominator before fixing it.
+    pitch_angle_deg = 18.0
+    b = np.tan(np.radians(pitch_angle_deg))
+
+    r_vir_a, r_disk_a = 100.0, 20.0  # e.g. "kpc"
+    r_vir_b, r_disk_b = 0.1, 0.02  # e.g. "Mpc": same galaxy, scaled by 1/1000
+
+    disk_a = build_galaxy_disk(0, 1, r_vir_a, pitch_angle_deg, num_arms=1, is_barred=True, rng=_FixedDiskDraws(r_disk_a))
+    disk_b = build_galaxy_disk(0, 1, r_vir_b, pitch_angle_deg, num_arms=1, is_barred=True, rng=_FixedDiskDraws(r_disk_b))
+
+    theta_a = np.arctan2(disk_a.positions[0, 1], disk_a.positions[0, 0])
+    theta_b = np.arctan2(disk_b.positions[0, 1], disk_b.positions[0, 0])
+    np.testing.assert_allclose(theta_a, theta_b, rtol=1e-4)
