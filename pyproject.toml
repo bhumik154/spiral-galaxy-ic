@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "spiral-galaxy-ic"
+version = "0.1.0"
+description = "Initial conditions for a barred or unbarred spiral galaxy disk, plus the NFW halo enclosed-mass formula, for seeding N-body galaxy simulations."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Bhumik Khatwani" }]
+dependencies = ["numpy>=1.24"]
+keywords = [
+  "astrophysics",
+  "n-body",
+  "galaxy",
+  "initial-conditions",
+  "nfw",
+  "simulation",
+  "spiral-galaxy",
+]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Topic :: Scientific/Engineering :: Astronomy",
+  "Topic :: Scientific/Engineering :: Physics",
+]
+
+[project.urls]
+Homepage = "https://github.com/bhumik154/spiral-galaxy-ic"
+Repository = "https://github.com/bhumik154/spiral-galaxy-ic"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/spiral_galaxy_ic"]
+
+[dependency-groups]
+dev = ["pytest>=7.0"]
