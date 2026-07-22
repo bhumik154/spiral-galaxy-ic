@@ -37,13 +37,14 @@ def test_exact_output_for_a_fixed_seed():
     #
     # These values have changed across several earlier versions of this
     # test: the switch to vectorized batched draws, replacing (b + 1e-3)
-    # with an exact b==0 check, and now replacing the fixed (r_bar + 1.0)
-    # reference length with one that scales with r_vir (a fixed +1.0 broke
-    # scale invariance: the same galaxy built with r_vir=100 "kpc" vs
-    # r_vir=0.1 "Mpc" produced a completely different spiral pitch, since
-    # r_bar scaled down with the unit change but the fixed 1.0 didn't).
-    # Same seed still gives identical output across calls to this version;
-    # it does not reproduce the exact output of any earlier version.
+    # with an exact b==0 check, replacing the fixed (r_bar + 1.0) reference
+    # length with one that scales with r_vir, and now replacing the bar and
+    # disk branches' fixed vertical scatter (0.5 and 1.0) with one scaled by
+    # r_max (a fixed absolute thickness meant a thin disk in kpc-scale units
+    # became a vertical pillar once the same galaxy was described in
+    # Mpc-scale units instead). Same seed still gives identical output
+    # across calls to this version; it does not reproduce the exact output
+    # of any earlier version.
     rng = np.random.default_rng(42)
     disk = build_galaxy_disk(n_stars=3, n_gas=2, r_vir=100.0, pitch_angle_deg=18.0, num_arms=4, is_barred=True, rng=rng)
 
@@ -51,10 +52,10 @@ def test_exact_output_for_a_fixed_seed():
         disk.positions,
         np.array(
             [
-                [0.7469255, -7.965055, 0.8784503],
-                [-4.361737, -11.776967, -0.049925912],
-                [-0.5894666, 7.9782534, -0.18486236],
-                [12.654846, -3.2611198, -0.68092954],
+                [0.7469255, -7.965055, 1.7569005],
+                [-4.361737, -11.776967, -0.099851824],
+                [-0.5894666, 7.9782534, -0.36972472],
+                [12.654846, -3.2611198, -1.3618591],
                 [0.18213761, -2.5979822, -0.6324852],
             ],
             dtype=np.float32,
@@ -355,3 +356,19 @@ def test_build_galaxy_disk_is_scale_invariant():
     theta_a = np.arctan2(disk_a.positions[0, 1], disk_a.positions[0, 0])
     theta_b = np.arctan2(disk_b.positions[0, 1], disk_b.positions[0, 0])
     np.testing.assert_allclose(theta_a, theta_b, rtol=1e-4)
+
+
+def test_vertical_scatter_scales_with_r_max_not_a_fixed_length():
+    # A fixed absolute z standard deviation is a thin disk in one unit
+    # system and a vertical pillar in another: confirmed directly, disk
+    # z-sigma=1.0 was 2.5% of r_max at r_vir=100 and 2500% of r_max at
+    # r_vir=0.1 (a thousandfold difference for the "same" galaxy) before
+    # this fix. r_vir_b here is 10x r_vir_a, so the standard deviation of z
+    # across all particles should scale by the same factor if it's really
+    # proportional to r_max, not stay fixed.
+    r_vir_a, r_vir_b = 100.0, 1000.0
+    disk_a = build_galaxy_disk(0, 200_000, r_vir_a, 18.0, 4, is_barred=False, rng=np.random.default_rng(1))
+    disk_b = build_galaxy_disk(0, 200_000, r_vir_b, 18.0, 4, is_barred=False, rng=np.random.default_rng(1))
+
+    ratio = disk_b.positions[:, 2].std() / disk_a.positions[:, 2].std()
+    assert 9.0 < ratio < 11.0

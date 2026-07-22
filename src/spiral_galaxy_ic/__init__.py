@@ -146,7 +146,13 @@ def build_galaxy_disk(n_stars, n_gas, r_vir, pitch_angle_deg, num_arms, is_barre
         y_bar = rng.normal(0, r_max * 0.02, size=n_bar)
         r[bar_mask] = np.sqrt(x_bar**2 + y_bar**2)
         theta[bar_mask] = np.arctan2(y_bar, x_bar)
-        z[bar_mask] = rng.normal(0, 0.5, size=n_bar)
+        # Scaled with r_max (the bar's own y_bar spread already uses the same
+        # fraction) for the same reason the radial formula above needs to:
+        # a fixed absolute thickness means a "thin disk" in kpc-scale units
+        # becomes a vertical pillar once the same galaxy is described in
+        # Mpc-scale units instead. Confirmed directly: a fixed 1.0 was 2.5%
+        # of r_max in one unit system and 2500% of it in another.
+        z[bar_mask] = rng.normal(0, r_max * 0.02, size=n_bar)
 
     n_disk = int(disk_mask.sum())
     if n_disk > 0:
@@ -176,7 +182,9 @@ def build_galaxy_disk(n_stars, n_gas, r_vir, pitch_angle_deg, num_arms, is_barre
             theta[disk_mask] = theta_spiral + arm_offset + rng.normal(0, 0.2, size=n_disk)
         else:
             theta[disk_mask] = rng.uniform(0, 2 * np.pi, size=n_disk)
-        z[disk_mask] = rng.normal(0, 1.0, size=n_disk)
+        # Same reasoning as the bar's z above: scaled with r_max (matching
+        # the bulge's own vertical spread) instead of a fixed absolute value.
+        z[disk_mask] = rng.normal(0, r_max * 0.05, size=n_disk)
 
     p = np.empty((n_total, 3), dtype=np.float32)
     p[:, 0] = r * np.cos(theta)

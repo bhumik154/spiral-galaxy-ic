@@ -14,11 +14,11 @@ Setting up a galaxy for an N-body simulation means answering two separate questi
 
 `n_stars`, `n_gas`, `num_arms`, `r_vir`, and `nfw_enclosed_mass`'s `concentration` and `total_mass` are all validated: negative particle counts or a negative arm count raise instead of silently producing wrong output (a negative `n_stars` used to silently mislabel every particle as gas, with no error at all), and non-positive `r_vir`/`concentration`/`total_mass` raise instead of dividing by zero partway through a parameter sweep.
 
-The spiral-arm formula's reference length scales with `r_vir` rather than using a fixed constant, so the same galaxy produces the same spiral pitch regardless of what units the caller happens to be working in (a fixed reference length previously meant the same galaxy described as `r_vir=100` "kpc" versus `r_vir=0.1` "Mpc" produced a visibly different, wrongly-wound spiral).
+The spiral-arm formula's reference length, and the bar's and disk's vertical scatter, all scale with `r_vir` rather than using a fixed constant, so the same galaxy produces the same shape and thickness regardless of what units the caller happens to be working in (a fixed vertical scatter previously meant the same galaxy described as `r_vir=100` "kpc" versus `r_vir=0.1` "Mpc" went from a thin disk to a vertical pillar).
 
 ## Tested against exact output, not just shape
 
-[`tests/test_spiral_galaxy_ic.py`](tests/test_spiral_galaxy_ic.py) has 31 cases. The core one locks in real numbers, not just array shapes:
+[`tests/test_spiral_galaxy_ic.py`](tests/test_spiral_galaxy_ic.py) has 32 cases. The core one locks in real numbers, not just array shapes:
 
 ```python
 def test_exact_output_for_a_fixed_seed():
@@ -61,6 +61,7 @@ That's computed directly by running the function once and locking the result in,
 | `nfw_enclosed_mass`'s `total_mass <= 0` raises `ValueError` | Unlike `r_vir` and `concentration`, `total_mass` is never a divisor here and can't crash the function; rejected anyway since it isn't a meaningful input to model |
 | A negative radius in `nfw_enclosed_mass` doesn't produce NaN | One bad entry in an array of radii (e.g. plotting a rotation curve) otherwise poisoned the whole result; negative radii are clamped to the r=0 case instead |
 | The same galaxy is scale-invariant across unit systems | Confirmed the previous fixed reference length broke this directly (two theta values differing by more than 14 radians for the same galaxy in different units) before fixing it |
+| Vertical scatter scales with `r_max`, not a fixed length | A tenfold change in `r_vir` must scale the disk's thickness by the same tenfold factor; confirmed a fixed absolute thickness only managed about 6.5x instead of 10x before this fix |
 
 ## Usage
 
