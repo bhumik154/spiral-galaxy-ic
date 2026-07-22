@@ -12,9 +12,11 @@ Setting up a galaxy for an N-body simulation means answering two separate questi
 
 `build_galaxy_disk` is fully vectorized: every particle's structural-component choice is drawn in one batched call, then each component's remaining parameters are drawn for all of its particles in one batched call each (branch selector, then bulge, then bar, then disk, in that fixed order). 60,000 particles takes about 8ms; an earlier per-particle Python loop took about 300ms for the same input. `num_arms=0` (a smooth, armless exponential disk, e.g. an S0 lenticular galaxy) is a real, supported case, not an edge case that happens to work: the disk is azimuthally uniform instead of tracing a spiral with the arm count forced to zero.
 
+`n_stars`, `n_gas`, `num_arms`, `r_vir`, and `nfw_enclosed_mass`'s `concentration` and `total_mass` are all validated: negative particle counts or a negative arm count raise instead of silently producing wrong output (a negative `n_stars` used to silently mislabel every particle as gas, with no error at all), and non-positive `r_vir`/`concentration`/`total_mass` raise instead of dividing by zero partway through a parameter sweep.
+
 ## Tested against exact output, not just shape
 
-[`tests/test_spiral_galaxy_ic.py`](tests/test_spiral_galaxy_ic.py) has 22 cases. The core one locks in real numbers, not just array shapes:
+[`tests/test_spiral_galaxy_ic.py`](tests/test_spiral_galaxy_ic.py) has 29 cases. The core one locks in real numbers, not just array shapes:
 
 ```python
 def test_exact_output_for_a_fixed_seed():
@@ -49,6 +51,12 @@ That's computed directly by running the function once and locking the result in,
 | `concentration <= 0` raises `ValueError` | Otherwise divides by zero (or gives a negative, meaningless scale radius); a parameter sweep starting at 0 would hit this |
 | `r_vir <= 0` raises `ValueError` | `r_vir=0` makes the disk-branch exponential's scale parameter exactly 0, which deterministically returns all-zero draws, not just an unlucky one |
 | A forced zero-radius draw doesn't produce NaN | `log(0)` is `-inf`, and `0 * cos(-inf)` is `NaN`: this silently poisons a particle's position. A real generator essentially never draws an exact 0.0 from a nonzero-scale exponential (confirmed empirically: zero exact-zero draws across 200 million samples), so this test wraps the generator to force one deterministically instead of relying on luck |
+| `pitch_angle_deg=0` doesn't crash | `b = tan(0) = 0` exactly is the one real singularity in the spiral-arm formula |
+| A trailing-arm pitch angle matches the formula exactly | A previous flat epsilon guard relocated the singularity to a specific negative pitch angle instead of removing it; this checks the corrected angle against a hand-computable expected value with every other random input pinned, not just "it doesn't crash" |
+| Negative `n_stars` or `n_gas` raises `ValueError` | Previously silent: a negative `n_stars` still gives a positive `n_total`, so the function ran to completion and mislabeled every particle as gas, with no error at all |
+| Negative `num_arms` raises `ValueError` | Previously silent: fell back to the armless disk instead of rejecting a nonsensical arm count |
+| `nfw_enclosed_mass`'s `r_vir <= 0` raises `ValueError` | Otherwise an unguarded `ZeroDivisionError` two lines later |
+| `nfw_enclosed_mass`'s `total_mass <= 0` raises `ValueError` | Unlike `r_vir` and `concentration`, `total_mass` is never a divisor here and can't crash the function; rejected anyway since it isn't a meaningful input to model |
 
 ## Usage
 

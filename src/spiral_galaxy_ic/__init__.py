@@ -32,6 +32,10 @@ def nfw_enclosed_mass(r, total_mass, r_vir, concentration):
     """
     if concentration <= 0:
         raise ValueError(f"concentration must be positive, got {concentration!r}")
+    if r_vir <= 0:
+        raise ValueError(f"r_vir must be positive, got {r_vir!r}")
+    if total_mass <= 0:
+        raise ValueError(f"total_mass must be positive, got {total_mass!r}")
 
     r_s = r_vir / concentration
     x = r / r_s
@@ -92,6 +96,10 @@ def build_galaxy_disk(n_stars, n_gas, r_vir, pitch_angle_deg, num_arms, is_barre
     """
     if r_vir <= 0:
         raise ValueError(f"r_vir must be positive, got {r_vir!r}")
+    if n_stars < 0 or n_gas < 0:
+        raise ValueError(f"particle counts cannot be negative, got n_stars={n_stars!r}, n_gas={n_gas!r}")
+    if num_arms < 0:
+        raise ValueError(f"num_arms cannot be negative, got {num_arms!r}; use 0 for an armless disk")
 
     if rng is None:
         rng = np.random.default_rng()
@@ -105,6 +113,13 @@ def build_galaxy_disk(n_stars, n_gas, r_vir, pitch_angle_deg, num_arms, is_barre
     r_bar = r_max * 0.2 if is_barred else 0.0
     pitch = np.radians(pitch_angle_deg)
     b = np.tan(pitch)
+    # A flat additive epsilon here (the previous approach) doesn't just guard
+    # pitch_angle_deg=0 (b=0 exactly): it relocates the singularity to
+    # b=-epsilon instead, which trailing (negative-pitch) arms can reach.
+    # Checking b itself for the exact singularity, rather than offsetting
+    # every value, protects the one real asymptote without moving it or
+    # skewing every other pitch angle's geometry.
+    b_safe = b if b != 0.0 else 1e-6
 
     branch = rng.random(n_total)
     bulge_mask = branch < 0.15
@@ -140,7 +155,7 @@ def build_galaxy_disk(n_stars, n_gas, r_vir, pitch_angle_deg, num_arms, is_barre
             # vanishingly rare with a nonzero scale) would otherwise give
             # log(0)=-inf, then 0*cos(-inf)=NaN once converted to cartesian
             # coordinates, silently poisoning that particle's position.
-            theta_spiral = np.log(np.maximum(r_disk, 1e-6) / (r_bar + 1.0)) / (b + 1e-3)
+            theta_spiral = np.log(np.maximum(r_disk, 1e-6) / (r_bar + 1.0)) / b_safe
             theta[disk_mask] = theta_spiral + arm_offset + rng.normal(0, 0.2, size=n_disk)
         else:
             theta[disk_mask] = rng.uniform(0, 2 * np.pi, size=n_disk)
