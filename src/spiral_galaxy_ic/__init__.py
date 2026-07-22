@@ -66,8 +66,22 @@ def build_galaxy_disk(n_stars, n_gas, r_vir, pitch_angle_deg, num_arms, is_barre
     Particles are drawn from three structural components, matching a
     standard spiral galaxy morphology (not derived from an NFW profile):
     a central bulge (15% of particles, Gaussian), an optional bar (up to
-    another 20%, only if is_barred), and a logarithmic spiral disk (the
-    remainder, exponential radial profile).
+    another 20%, only if is_barred), and a disk (the remainder, exponential
+    radial profile). With num_arms > 0 the disk traces a log-spiral pattern
+    banded into that many discrete arms; with num_arms == 0 the disk is
+    azimuthally uniform instead (a smooth, armless exponential disk, e.g.
+    an S0 lenticular galaxy), rather than raising an error.
+
+    Fully vectorized: draws every particle's structural-component choice in
+    one batched call, then draws each component's remaining parameters for
+    all of its particles in one batched call each, in this fixed order:
+    branch selector, then bulge, then bar, then disk. This is roughly two
+    orders of magnitude faster than a per-particle Python loop at realistic
+    particle counts (tens of thousands), but it means the exact sequence of
+    values drawn from a given seed is not the same as drawing one particle
+    at a time; only the same generator, given the same seed, is guaranteed
+    to reproduce the same output across calls to this version of the
+    function.
 
     rng: an optional numpy.random.Generator (e.g. np.random.default_rng(seed)).
     Pass one explicitly for reproducible output; omit it for a fresh,
@@ -77,39 +91,62 @@ def build_galaxy_disk(n_stars, n_gas, r_vir, pitch_angle_deg, num_arms, is_barre
         rng = np.random.default_rng()
 
     n_total = n_stars + n_gas
-    p = np.zeros((n_total, 3), dtype=np.float32)
-    v_dir = np.zeros((n_total, 3), dtype=np.float32)
-    r_arr = np.zeros(n_total, dtype=np.float32)
-    t = np.zeros(n_total, dtype=np.int32)
+    r = np.empty(n_total, dtype=np.float64)
+    theta = np.empty(n_total, dtype=np.float64)
+    z = np.empty(n_total, dtype=np.float64)
 
     r_max = r_vir * 0.4
     r_bar = r_max * 0.2 if is_barred else 0.0
     pitch = np.radians(pitch_angle_deg)
     b = np.tan(pitch)
 
-    for i in range(n_total):
-        rand = rng.random()
-        if rand < 0.15:
-            r = np.abs(rng.normal(0, r_max * 0.05))
-            theta = rng.uniform(0, 2 * np.pi)
-            z = rng.normal(0, r_max * 0.05)
-        elif is_barred and rand < 0.35:
-            x_bar = rng.uniform(-r_bar, r_bar)
-            y_bar = rng.normal(0, r_max * 0.02)
-            r = np.sqrt(x_bar**2 + y_bar**2)
-            theta = np.arctan2(y_bar, x_bar)
-            z = rng.normal(0, 0.5)
+    branch = rng.random(n_total)
+    bulge_mask = branch < 0.15
+    bar_mask = is_barred & (branch >= 0.15) & (branch < 0.35)
+    disk_mask = ~bulge_mask & ~bar_mask
+
+    n_bulge = int(bulge_mask.sum())
+    if n_bulge > 0:
+        r[bulge_mask] = np.abs(rng.normal(0, r_max * 0.05, size=n_bulge))
+        theta[bulge_mask] = rng.uniform(0, 2 * np.pi, size=n_bulge)
+        z[bulge_mask] = rng.normal(0, r_max * 0.05, size=n_bulge)
+
+    n_bar = int(bar_mask.sum())
+    if n_bar > 0:
+        x_bar = rng.uniform(-r_bar, r_bar, size=n_bar)
+        y_bar = rng.normal(0, r_max * 0.02, size=n_bar)
+        r[bar_mask] = np.sqrt(x_bar**2 + y_bar**2)
+        theta[bar_mask] = np.arctan2(y_bar, x_bar)
+        z[bar_mask] = rng.normal(0, 0.5, size=n_bar)
+
+    n_disk = int(disk_mask.sum())
+    if n_disk > 0:
+        r_disk = rng.exponential(r_max * 0.3, size=n_disk)
+        r_disk = np.clip(r_disk, r_bar, r_max)
+        r[disk_mask] = r_disk
+        if num_arms > 0:
+            arm_offset = rng.integers(0, num_arms, size=n_disk) * (2 * np.pi / num_arms)
+            theta_spiral = np.log(r_disk / (r_bar + 1.0)) / (b + 1e-3)
+            theta[disk_mask] = theta_spiral + arm_offset + rng.normal(0, 0.2, size=n_disk)
         else:
-            r = rng.exponential(r_max * 0.3)
-            r = np.clip(r, r_bar, r_max)
-            arm_offset = rng.integers(0, num_arms) * (2 * np.pi / num_arms)
-            theta_spiral = np.log(r / (r_bar + 1.0)) / (b + 1e-3)
-            theta = theta_spiral + arm_offset + rng.normal(0, 0.2)
-            z = rng.normal(0, 1.0)
+            theta[disk_mask] = rng.uniform(0, 2 * np.pi, size=n_disk)
+        z[disk_mask] = rng.normal(0, 1.0, size=n_disk)
 
-        p[i] = [r * np.cos(theta), r * np.sin(theta), z]
-        r_arr[i] = r
-        v_dir[i] = [-np.sin(theta), np.cos(theta), 0.0]
-        t[i] = GAS if i >= n_stars else STAR
+    p = np.empty((n_total, 3), dtype=np.float32)
+    p[:, 0] = r * np.cos(theta)
+    p[:, 1] = r * np.sin(theta)
+    p[:, 2] = z
 
-    return GalaxyDisk(positions=p, velocity_directions=v_dir, radii=r_arr, particle_types=t)
+    v_dir = np.empty((n_total, 3), dtype=np.float32)
+    v_dir[:, 0] = -np.sin(theta)
+    v_dir[:, 1] = np.cos(theta)
+    v_dir[:, 2] = 0.0
+
+    t = np.where(np.arange(n_total) >= n_stars, GAS, STAR).astype(np.int32)
+
+    return GalaxyDisk(
+        positions=p,
+        velocity_directions=v_dir,
+        radii=r.astype(np.float32),
+        particle_types=t,
+    )

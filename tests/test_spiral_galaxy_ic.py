@@ -34,6 +34,14 @@ def test_exact_output_for_a_fixed_seed():
     # Golden regression test: computed once directly from the function and
     # locked in, not hand-derived. If this changes, the generator's output
     # changed, whether intentionally or not.
+    #
+    # These values differ from earlier versions of this test: switching
+    # build_galaxy_disk from a per-particle Python loop to vectorized,
+    # batched draws (branch selector, then bulge, then bar, then disk, each
+    # drawn for all of its particles in one call) changed the order random
+    # values are consumed from the generator. Same seed still gives
+    # identical output across calls to this version; it does not reproduce
+    # the exact output of the pre-vectorization version.
     rng = np.random.default_rng(42)
     disk = build_galaxy_disk(n_stars=3, n_gas=2, r_vir=100.0, pitch_angle_deg=18.0, num_arms=4, is_barred=True, rng=rng)
 
@@ -41,11 +49,11 @@ def test_exact_output_for_a_fixed_seed():
         disk.positions,
         np.array(
             [
-                [14.236679, -24.150312, -1.9510351],
-                [16.149965, 5.0447078, -0.016801158],
-                [7.5199604, -2.7295046, 1.1272413],
-                [-2.2694931, -7.6713362, -0.95888263],
-                [7.0299501, -3.8183510, 1.2225413],
+                [-2.1175382, -7.7146635, 0.8784503],
+                [-8.284274, -9.438882, -0.049925912],
+                [2.269493, 7.671336, -0.18486236],
+                [10.649411, -7.574303, -0.68092954],
+                [0.18213761, -2.5979822, -0.6324852],
             ],
             dtype=np.float32,
         ),
@@ -55,18 +63,18 @@ def test_exact_output_for_a_fixed_seed():
         disk.velocity_directions,
         np.array(
             [
-                [0.86145663, 0.50783116, 0.0],
-                [-0.29815888, 0.95451623, 0.0],
-                [0.34118807, 0.93999505, 0.0],
-                [0.958917, -0.28368664, 0.0],
-                [0.47729388, 0.87874377, 0.0],
+                [0.96433294, -0.26469228, 0.0],
+                [0.75157934, -0.6596427, 0.0],
+                [-0.958917, 0.28368664, 0.0],
+                [0.5795943, 0.81490517, 0.0],
+                [0.9975515, 0.06993568, 0.0],
             ],
             dtype=np.float32,
         ),
         rtol=1e-5,
     )
     np.testing.assert_allclose(
-        disk.radii, [28.034275, 16.919529, 8.0, 8.0, 8.0], rtol=1e-5
+        disk.radii, [8.0, 12.55873, 8.0, 13.068283, 2.604359], rtol=1e-5
     )
     np.testing.assert_array_equal(disk.particle_types, [STAR, STAR, STAR, GAS, GAS])
 
@@ -111,6 +119,28 @@ def test_spiral_arm_particles_stay_within_r_bar_and_r_max():
 
     disk = build_galaxy_disk(2000, 500, r_vir, 18.0, 4, is_barred, rng=np.random.default_rng(11))
     assert np.all(disk.radii <= r_max + 1e-4)
+
+
+def test_num_arms_zero_does_not_crash():
+    # rng.integers(0, num_arms) and dividing by num_arms both blow up at
+    # num_arms=0 if the disk branch tries to use the spiral-arm formula at
+    # all; this must take a different path instead, not just avoid the crash.
+    disk = build_galaxy_disk(500, 100, 150.0, 18.0, num_arms=0, is_barred=False, rng=np.random.default_rng(1))
+    assert disk.positions.shape == (600, 3)
+    assert np.all(np.isfinite(disk.positions))
+
+
+def test_num_arms_zero_gives_azimuthally_uniform_disk_not_a_spiral():
+    # A smooth, armless exponential disk (e.g. an S0 lenticular galaxy)
+    # should be roughly uniform in angle around the center, not still
+    # tracing a single continuous log-spiral with the arm count forced to 0.
+    disk = build_galaxy_disk(0, 200_000, 150.0, 18.0, num_arms=0, is_barred=False, rng=np.random.default_rng(3))
+    theta = np.arctan2(disk.positions[:, 1], disk.positions[:, 0])
+    counts, _ = np.histogram(theta, bins=8, range=(-np.pi, np.pi))
+    # Roughly uniform: no bin should be wildly over- or under-represented.
+    # A real spiral pattern concentrates particles at radius-dependent
+    # angles instead, which would blow this ratio out far past 1.2.
+    assert counts.max() / counts.min() < 1.2
 
 
 def test_unbarred_galaxy_never_hits_the_bar_branch():

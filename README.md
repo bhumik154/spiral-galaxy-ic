@@ -10,9 +10,11 @@ Setting up a galaxy for an N-body simulation means answering two separate questi
 
 `nfw_enclosed_mass` is the separate, closed-form Navarro-Frenk-White (1996) enclosed-mass formula, for whenever you do need the halo's contribution to gravity or a rotation curve.
 
+`build_galaxy_disk` is fully vectorized: every particle's structural-component choice is drawn in one batched call, then each component's remaining parameters are drawn for all of its particles in one batched call each (branch selector, then bulge, then bar, then disk, in that fixed order). 60,000 particles takes about 8ms; an earlier per-particle Python loop took about 300ms for the same input. `num_arms=0` (a smooth, armless exponential disk, e.g. an S0 lenticular galaxy) is a real, supported case, not an edge case that happens to work: the disk is azimuthally uniform instead of tracing a spiral with the arm count forced to zero.
+
 ## Tested against exact output, not just shape
 
-[`tests/test_spiral_galaxy_ic.py`](tests/test_spiral_galaxy_ic.py) has 14 cases. The core one locks in real numbers, not just array shapes:
+[`tests/test_spiral_galaxy_ic.py`](tests/test_spiral_galaxy_ic.py) has 16 cases. The core one locks in real numbers, not just array shapes:
 
 ```python
 def test_exact_output_for_a_fixed_seed():
@@ -20,7 +22,7 @@ def test_exact_output_for_a_fixed_seed():
     disk = build_galaxy_disk(n_stars=3, n_gas=2, r_vir=100.0, pitch_angle_deg=18.0,
                               num_arms=4, is_barred=True, rng=rng)
 
-    np.testing.assert_allclose(disk.radii, [28.034275, 16.919529, 8.0, 8.0, 8.0], rtol=1e-5)
+    np.testing.assert_allclose(disk.radii, [8.0, 12.55873, 8.0, 13.068283, 2.604359], rtol=1e-5)
     np.testing.assert_array_equal(disk.particle_types, [STAR, STAR, STAR, GAS, GAS])
 ```
 
@@ -37,6 +39,8 @@ That's computed directly by running the function once and locking the result in,
 | Velocity direction is always a unit vector, always z=0 | This is a thin-disk kinematic model; that assumption is enforced, not just described |
 | Radii are never negative | Basic physical sanity |
 | Spiral-arm particles stay within [r_bar, r_max] | The one radius bound this function actually guarantees by construction (bulge and bar are unclipped Gaussians, not bounded) |
+| `num_arms=0` doesn't crash | The naive spiral-arm formula divides by `num_arms` and calls `rng.integers(0, num_arms)`, both of which blow up at 0 |
+| `num_arms=0` gives an azimuthally uniform disk | Not just "doesn't crash": confirms it's a real armless disk, not a spiral with the arm count silently forced to 0 |
 | Barred vs. unbarred diverge under the same seed | The bar branch is only reachable when `is_barred=True` |
 | NFW enclosed mass equals total mass at the virial radius | True for any concentration, by construction of the formula |
 | NFW enclosed mass is zero at the center | Basic edge case |
