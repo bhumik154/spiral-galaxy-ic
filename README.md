@@ -14,7 +14,7 @@ Setting up a galaxy for an N-body simulation means answering two separate questi
 
 ## Tested against exact output, not just shape
 
-[`tests/test_spiral_galaxy_ic.py`](tests/test_spiral_galaxy_ic.py) has 16 cases. The core one locks in real numbers, not just array shapes:
+[`tests/test_spiral_galaxy_ic.py`](tests/test_spiral_galaxy_ic.py) has 22 cases. The core one locks in real numbers, not just array shapes:
 
 ```python
 def test_exact_output_for_a_fixed_seed():
@@ -46,6 +46,9 @@ That's computed directly by running the function once and locking the result in,
 | NFW enclosed mass is zero at the center | Basic edge case |
 | NFW enclosed mass increases monotonically with radius | Basic physical sanity |
 | A known reference value | Computed by calling the function, not hand-derived (a wrong hand calculation was caught and fixed while writing this test) |
+| `concentration <= 0` raises `ValueError` | Otherwise divides by zero (or gives a negative, meaningless scale radius); a parameter sweep starting at 0 would hit this |
+| `r_vir <= 0` raises `ValueError` | `r_vir=0` makes the disk-branch exponential's scale parameter exactly 0, which deterministically returns all-zero draws, not just an unlucky one |
+| A forced zero-radius draw doesn't produce NaN | `log(0)` is `-inf`, and `0 * cos(-inf)` is `NaN`: this silently poisons a particle's position. A real generator essentially never draws an exact 0.0 from a nonzero-scale exponential (confirmed empirically: zero exact-zero draws across 200 million samples), so this test wraps the generator to force one deterministically instead of relying on luck |
 
 ## Usage
 

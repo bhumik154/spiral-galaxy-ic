@@ -179,3 +179,50 @@ def test_nfw_enclosed_mass_known_reference_value():
     # r=r_vir/2=100, r_vir=200, c=5.
     m = nfw_enclosed_mass(r=100.0, total_mass=1e12, r_vir=200.0, concentration=5.0)
     assert m == pytest.approx(561834902078.2576, rel=1e-9)
+
+
+@pytest.mark.parametrize("concentration", [0.0, -1.0, -5.0])
+def test_nfw_enclosed_mass_rejects_non_positive_concentration(concentration):
+    # Otherwise r_s = r_vir / concentration divides by zero (or gives a
+    # negative scale radius, physically meaningless). A parameter-sweep
+    # script that ranges concentration from 0 upward would hit this.
+    with pytest.raises(ValueError):
+        nfw_enclosed_mass(r=100.0, total_mass=1e12, r_vir=200.0, concentration=concentration)
+
+
+@pytest.mark.parametrize("r_vir", [0.0, -50.0])
+def test_build_galaxy_disk_rejects_non_positive_r_vir(r_vir):
+    # r_vir=0 makes r_max=0, which makes the disk-branch exponential draw's
+    # scale parameter exactly 0 - and rng.exponential(scale=0) deterministically
+    # returns all zeros (confirmed directly, not assumed), which would
+    # otherwise silently poison every disk particle's position with NaN.
+    with pytest.raises(ValueError):
+        build_galaxy_disk(100, 20, r_vir, 18.0, 4, True, rng=np.random.default_rng(1))
+
+
+class _ForcesAZeroExponentialDraw:
+    """Wraps a real Generator but forces the first exponential() draw to
+    include an exact 0.0, to deterministically test the log-singularity
+    floor. A real Generator essentially never produces an exact 0.0 from a
+    nonzero-scale exponential (confirmed empirically: zero exact-zero draws
+    across 200 million samples), so this is the only practical way to test
+    that specific line without relying on astronomical luck.
+    """
+
+    def __init__(self, real_rng):
+        self._real = real_rng
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+    def exponential(self, scale, size=None):
+        draws = self._real.exponential(scale, size=size)
+        draws[0] = 0.0
+        return draws
+
+
+def test_disk_generation_does_not_produce_nan_from_a_zero_radius_draw():
+    forced_rng = _ForcesAZeroExponentialDraw(np.random.default_rng(1))
+    disk = build_galaxy_disk(0, 5000, 150.0, 18.0, 4, is_barred=False, rng=forced_rng)
+    assert not np.any(np.isnan(disk.positions))
+    assert not np.any(np.isnan(disk.velocity_directions))

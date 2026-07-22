@@ -30,6 +30,9 @@ def nfw_enclosed_mass(r, total_mass, r_vir, concentration):
         m(r) = total_mass * f(r / r_s) / f(concentration)
         f(x) = ln(1 + x) - x / (1 + x)
     """
+    if concentration <= 0:
+        raise ValueError(f"concentration must be positive, got {concentration!r}")
+
     r_s = r_vir / concentration
     x = r / r_s
     f_x = np.log(1.0 + x) - x / (1.0 + x)
@@ -87,6 +90,9 @@ def build_galaxy_disk(n_stars, n_gas, r_vir, pitch_angle_deg, num_arms, is_barre
     Pass one explicitly for reproducible output; omit it for a fresh,
     unseeded generator (nondeterministic output) each call.
     """
+    if r_vir <= 0:
+        raise ValueError(f"r_vir must be positive, got {r_vir!r}")
+
     if rng is None:
         rng = np.random.default_rng()
 
@@ -102,7 +108,10 @@ def build_galaxy_disk(n_stars, n_gas, r_vir, pitch_angle_deg, num_arms, is_barre
 
     branch = rng.random(n_total)
     bulge_mask = branch < 0.15
-    bar_mask = is_barred & (branch >= 0.15) & (branch < 0.35)
+    if is_barred:
+        bar_mask = (branch >= 0.15) & (branch < 0.35)
+    else:
+        bar_mask = np.zeros(n_total, dtype=bool)
     disk_mask = ~bulge_mask & ~bar_mask
 
     n_bulge = int(bulge_mask.sum())
@@ -126,7 +135,12 @@ def build_galaxy_disk(n_stars, n_gas, r_vir, pitch_angle_deg, num_arms, is_barre
         r[disk_mask] = r_disk
         if num_arms > 0:
             arm_offset = rng.integers(0, num_arms, size=n_disk) * (2 * np.pi / num_arms)
-            theta_spiral = np.log(r_disk / (r_bar + 1.0)) / (b + 1e-3)
+            # np.maximum floors r_disk before the log: an exact r_disk=0 (the
+            # exponential distribution's domain includes 0, though it's
+            # vanishingly rare with a nonzero scale) would otherwise give
+            # log(0)=-inf, then 0*cos(-inf)=NaN once converted to cartesian
+            # coordinates, silently poisoning that particle's position.
+            theta_spiral = np.log(np.maximum(r_disk, 1e-6) / (r_bar + 1.0)) / (b + 1e-3)
             theta[disk_mask] = theta_spiral + arm_offset + rng.normal(0, 0.2, size=n_disk)
         else:
             theta[disk_mask] = rng.uniform(0, 2 * np.pi, size=n_disk)
